@@ -235,6 +235,7 @@ def preprocess_motion_data(
     if z_min >= mat_height:
         # On a mat.
         z_min -= mat_height
+    print(f"z_min = {z_min}")
     human_joints[:, :, 2] -= z_min
 
     # Scale human joints

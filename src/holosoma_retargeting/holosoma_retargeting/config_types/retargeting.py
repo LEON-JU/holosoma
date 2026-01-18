@@ -44,6 +44,10 @@ class RetargetingConfig:
     augmentation: bool = False
     """Whether to use augmentation."""
 
+    custom_scale_factor: float | None = None
+    """Optional override for the human->robot scale factor (applied during preprocessing).
+    If provided, this value is used instead of dataset-derived scaling."""
+
     # --- Nested configs ---
     robot_config: RobotConfig = field(default_factory=lambda: RobotConfig(robot_type="g1"))
     """Robot configuration (nested - can override robot_urdf_file, robot_dof, etc.

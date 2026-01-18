@@ -181,6 +181,7 @@ def load_motion_data(
     task_name: str,
     constants: SimpleNamespace,
     motion_data_config: MotionDataConfig,
+    custom_scale_factor: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     """Load motion data based on task type and format.
 
@@ -221,7 +222,9 @@ def load_motion_data(
                 raise FileNotFoundError(f"InterMimic data file not found: {pt_path}")
 
             human_joints, object_poses = load_intermimic_data(str(pt_path))
-            smpl_scale = calculate_scale_factor(task_name, constants.ROBOT_HEIGHT)
+            smpl_scale = float(custom_scale_factor) if custom_scale_factor is not None else calculate_scale_factor(
+                task_name, constants.ROBOT_HEIGHT
+            )
         elif data_format == "mocap":
             downsample = 4
             npy_file = data_path / f"{task_name}.npy"
@@ -230,15 +233,18 @@ def load_motion_data(
 
             human_joints = np.load(str(npy_file))[::downsample]
 
-            default_human_height = motion_data_config.default_human_height or 1.78
-            smpl_scale = constants.ROBOT_HEIGHT / default_human_height
+            if custom_scale_factor is not None:
+                smpl_scale = float(custom_scale_factor)
+            else:
+                default_human_height = motion_data_config.default_human_height or 1.78
+                smpl_scale = constants.ROBOT_HEIGHT / default_human_height
         elif data_format == "smplx":
             npz_file = data_path / f"{task_name}.npz"
 
             human_data = np.load(str(npz_file))
             human_joints = human_data["global_joint_positions"]
             human_height = human_data["height"]
-            smpl_scale = constants.ROBOT_HEIGHT / human_height
+            smpl_scale = float(custom_scale_factor) if custom_scale_factor is not None else constants.ROBOT_HEIGHT / human_height
         else:
             # For other custom data format, if it uses consistent .npz file like SMPLX,
             # you can use the same logic as SMPLX.
@@ -247,7 +253,7 @@ def load_motion_data(
             human_data = np.load(str(npz_file))
             human_joints = human_data["global_joint_positions"]
             human_height = human_data["height"]
-            smpl_scale = constants.ROBOT_HEIGHT / human_height
+            smpl_scale = float(custom_scale_factor) if custom_scale_factor is not None else constants.ROBOT_HEIGHT / human_height
 
         # Create dummy object poses for robot_only
         num_frames = human_joints.shape[0]
@@ -259,7 +265,9 @@ def load_motion_data(
             raise FileNotFoundError(f"InterMimic data file not found: {pt_path}")
 
         human_joints, object_poses = load_intermimic_data(str(pt_path))
-        smpl_scale = calculate_scale_factor(task_name, constants.ROBOT_HEIGHT)
+        smpl_scale = float(custom_scale_factor) if custom_scale_factor is not None else calculate_scale_factor(
+            task_name, constants.ROBOT_HEIGHT
+        )
 
     elif task_type == "climbing":
         task_dir = data_path / task_name
@@ -273,8 +281,11 @@ def load_motion_data(
         human_joints = np.load(str(npy_file))[::downsample]
         num_frames = human_joints.shape[0]
         object_poses = np.tile(np.array([[1, 0, 0, 0, 0, 0, 0]]), (num_frames, 1))
-        default_human_height = motion_data_config.default_human_height or 1.78
-        smpl_scale = constants.ROBOT_HEIGHT / default_human_height
+        if custom_scale_factor is not None:
+            smpl_scale = float(custom_scale_factor)
+        else:
+            default_human_height = motion_data_config.default_human_height or 1.78
+            smpl_scale = constants.ROBOT_HEIGHT / default_human_height
 
     logger.debug(
         "Loaded %d frames, scale factor: %.4f",
@@ -639,7 +650,13 @@ def main(cfg: RetargetingConfig) -> None:
 
     # Load motion data
     human_joints, object_poses, smpl_scale = load_motion_data(
-        task_type, data_format, data_path, task_name, constants, cfg.motion_data_config
+        task_type,
+        data_format,
+        data_path,
+        task_name,
+        constants,
+        cfg.motion_data_config,
+        custom_scale_factor=cfg.custom_scale_factor,
     )
 
     # Get toe names from motion data config (depends only on data_format)
