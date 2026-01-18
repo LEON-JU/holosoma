@@ -39,6 +39,20 @@ class ManualPaths:
     """Workspace for pipeline outputs/artifacts (stable across sessions)."""
 
 
+@dataclass(frozen=True)
+class PipelineArgs:
+    seq: SeqName
+    robot: RobotType = "g1"
+    human_height_m: float = 1.7
+
+    # Ground alignment behavior
+    run_ground_alignment: bool = True
+    """If True, opens Viser UI and writes `transform.json`."""
+
+    # Manual path overrides (deploy-time)
+    manual: ManualPaths = ManualPaths()
+
+
 # ==================================================
 # Derived constants / mappings
 # ==================================================

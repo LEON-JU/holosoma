@@ -12,21 +12,50 @@ python -m holosoma_retargeting.pipeline --seq smooth --robot g1
 
 ## 2) Config: `config.py`
 
-Edit `config.py` (MANUAL CONFIGURATION section) to match your machine:
+Edit `config.py` and set the following paths:
 
 - `results_data_dir`: Human mesh output folder, contains SMPL-X results 
 - `her_parkour_dir`: Front-End output folder 
 - `smpl_model_path`: SMPL/SMPL-X model folder
 - `runs_root`: output workspace for pipeline
 
-You can also override via CLI (Tyro nested args), for example:
+```
+@dataclass(frozen=True)
+class ManualPaths:
+    """Edit these when deploying on a new machine."""
 
-```bash
-python -m holosoma_retargeting.pipeline --seq smooth --robot g1 \
-  --manual.results-data-dir /path/to/results \
-  --manual.her-parkour-dir /path/to/Her_data/Parkour \
-  --manual.smpl-model-path /path/to/SMPL_models/models \
-  --manual.runs-root /path/to/holosoma_runs
+    results_data_dir: Path = Path("/home/juyiang/data/results")
+    """Directory containing per-sequence result folders (e.g. smooth/wall_smooth/...)."""
+
+    her_parkour_dir: Path = Path("/home/juyiang/data/Her_data/Parkour")
+    """Directory containing Parkour scene assets (e.g. fused_scene.ply, predicted/)."""
+
+    smpl_model_path: Path = Path("/home/juyiang/data/SMPL_models/models")
+    """SMPL/SMPL-X model directory for `smplx.create()`."""
+
+    runs_root: Path = Path("/home/juyiang/data/holosoma_runs")
+    """Workspace for pipeline outputs/artifacts (stable across sessions)."""
+```
+
+Also set these parameters:
+
+- `seq`: choose from `smooth`, `wall_smooth` and `rooftop_smooth`
+- `robot`: choose from `g1` and `t1`
+- `human_height_m`: default human height
+
+```
+@dataclass(frozen=True)
+class PipelineArgs:
+    seq: SeqName
+    robot: RobotType = "g1"
+    human_height_m: float = 1.7
+
+    # Ground alignment behavior
+    run_ground_alignment: bool = True
+    """If True, opens Viser UI and writes `transform.json`."""
+
+    # Manual path overrides (deploy-time)
+    manual: ManualPaths = ManualPaths()
 ```
 
 ## 3) Pipeline Behavior
@@ -37,6 +66,7 @@ Pipeline steps:
    - Uses RGB-D + predicted masks to build a scene cloud.
    - Interactive plane fit with Viser.
    - Saves `transform.json` to a stable artifact path.
+   - set `run_ground_alignment` as **False** to skip this step and reuse `transform.json`
 
 2. **Prepare retarget data**  
    - Converts SMPL-X results to InterMimic-style `.pt`.
@@ -100,12 +130,3 @@ Notes:
 - It loads the retargeted motion from `outputs/retarget/{seq}.npz`.
 - Point clouds are downsampled by default for remote use.
 
-Optional flags (examples):
-
-```bash
-python -m holosoma_retargeting.viser_player_recon --seq smooth --robot g1 --scene-source rgbd
-python -m holosoma_retargeting.viser_player_recon --seq smooth --robot g1 --qpos-npz /path/to/custom.npz
-python -m holosoma_retargeting.viser_player_recon --seq smooth --robot g1 --robot-urdf models/g1/g1_29dof.urdf
-```
-
-If you change `runs_root` or other manual paths, pass the same overrides here as in the pipeline.

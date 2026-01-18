@@ -11,7 +11,7 @@ Runs the end-to-end flow:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -23,9 +23,7 @@ import torch
 from holosoma_retargeting import ground_alignment
 from holosoma_retargeting import prepare_retarget
 from holosoma_retargeting.config import (
-    ManualPaths,
-    RobotType,
-    SeqName,
+    PipelineArgs,
     ensure_run_dirs,
     get_scale_factor,
     get_sequence_paths,
@@ -75,23 +73,6 @@ def _compute_vertical_bias_z_min_from_intermimic_pt(
     return z_min
 
 
-@dataclass
-class PipelineArgs:
-    seq: SeqName
-    robot: RobotType = "g1"
-    human_height_m: float = 1.7
-
-    # Ground alignment behavior
-    run_ground_alignment: bool = True
-    """If True, opens Viser UI and writes `transform.json`."""
-
-    reuse_existing_transform: bool = True
-    """If True, skip UI and reuse existing `transform.json` if present."""
-
-    # Manual path overrides (deploy-time)
-    manual: ManualPaths = ManualPaths()
-
-
 def main(args: PipelineArgs) -> None:
     paths = get_sequence_paths(seq=args.seq, robot=args.robot, manual=args.manual)
     ensure_run_dirs(paths)
@@ -99,13 +80,7 @@ def main(args: PipelineArgs) -> None:
     scale_factor = get_scale_factor(args.robot, args.human_height_m)
 
     # 1) Ground alignment
-    if args.reuse_existing_transform:
-        if not paths.ground_transform_json.exists():
-            raise FileNotFoundError(
-                f"reuse_existing_transform=True but transform not found: {paths.ground_transform_json}"
-            )
-        T_align = _load_transform_json(paths.ground_transform_json)
-    elif args.run_ground_alignment:
+    if args.run_ground_alignment:
         ga_cfg = {
             "smpl_model_path": str(args.manual.smpl_model_path),
             "human_mesh_path": str(paths.all_results_video),
@@ -123,8 +98,9 @@ def main(args: PipelineArgs) -> None:
         T_align = ground_alignment.main(ga_cfg)
         _save_transform_json(paths.ground_transform_json, T_align, seq=args.seq, robot=args.robot)
     else:
-        T_align = np.eye(4, dtype=np.float64)
-        _save_transform_json(paths.ground_transform_json, T_align, seq=args.seq, robot=args.robot)
+        if not paths.ground_transform_json.exists():
+            raise FileNotFoundError(f"run_ground_alignment=False but transform not found: {paths.ground_transform_json}")
+        T_align = _load_transform_json(paths.ground_transform_json)
 
     # 2) Prepare retarget data (InterMimic-style `.pt`)
     prep_cfg = prepare_retarget.PrepareRetargetConfig(
