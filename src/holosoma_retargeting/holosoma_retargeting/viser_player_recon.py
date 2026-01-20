@@ -158,7 +158,7 @@ def main(cfg: ReconViewerConfig) -> None:
     server.scene.add_frame("/world_axes", show_axes=True)
 
     # Scene point cloud
-    scene_points, scene_colors = _downsample(scene_points, scene_colors, cfg.scene_max_points)
+    # scene_points, scene_colors = _downsample(scene_points, scene_colors, cfg.scene_max_points)
     colors_uint8 = (np.clip(scene_colors, 0.0, 1.0) * 255.0).astype(np.uint8) if scene_colors is not None else None
     scene_handle = server.scene.add_point_cloud(
         "/scene/cloud",
@@ -179,7 +179,7 @@ def main(cfg: ReconViewerConfig) -> None:
             color=(200, 200, 200),
             opacity=0.7,
         )
-    # Human point cloud (downsampled per frame)
+    # Human point cloud
     human_pc_handle = {"pc": None}
 
     # Robot
@@ -288,7 +288,8 @@ def main(cfg: ReconViewerConfig) -> None:
                 pts = _apply_display_transform(
                     pts_raw, z_min=0.0, scale=scale_factor, apply_z_min=False, apply_scale=True
                 )
-                pts, cols = _downsample(pts, cols_raw, cfg.human_max_points)
+                pts, cols = pts, cols_raw
+                # pts, cols = _downsample(pts, cols_raw, cfg.human_max_points)
                 human_pc_handle["pc"].points = pts.astype(np.float32)
                 if cols is not None:
                     human_pc_handle["pc"].colors = (np.clip(cols, 0.0, 1.0) * 255.0).astype(np.uint8)
@@ -300,7 +301,8 @@ def main(cfg: ReconViewerConfig) -> None:
                 pts = _apply_display_transform(
                     pts_raw, z_min=0, scale=scale_factor, apply_z_min=False, apply_scale=True
                 )
-                pts, cols = _downsample(pts, cols_raw, cfg.frame_max_points)
+                pts, cols = pts, cols_raw
+                # pts, cols = _downsample(pts, cols_raw, cfg.frame_max_points)
                 frame_cloud_handle["pc"].points = pts.astype(np.float32)
                 if cols is not None:
                     frame_cloud_handle["pc"].colors = (np.clip(cols, 0.0, 1.0) * 255.0).astype(np.uint8)
@@ -367,7 +369,8 @@ def main(cfg: ReconViewerConfig) -> None:
                 pts = _apply_display_transform(
                     pts_raw, z_min=0.0, scale=scale_factor, apply_z_min=False, apply_scale=True
                 )
-                pts, cols = _downsample(pts, cols_raw, cfg.human_max_points)
+                pts, cols = pts, cols_raw
+                # pts, cols = _downsample(pts, cols_raw, cfg.human_max_points)
                 colors = (np.clip(cols, 0.0, 1.0) * 255.0).astype(np.uint8) if cols is not None else None
                 human_pc_handle["pc"] = server.scene.add_point_cloud(
                     "/human/points",

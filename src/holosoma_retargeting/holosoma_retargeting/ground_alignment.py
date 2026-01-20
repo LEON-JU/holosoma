@@ -418,7 +418,7 @@ def load_scene_pointcloud_from_rgbd(
     colors_float01 = colors_uint8.astype(np.float32) / 255.0
 
     # Only for debugging, delete later
-    points, colors_float01 = voxel_downsample(points, colors_float01, voxel_size=0.05)
+    # points, colors_float01 = voxel_downsample(points, colors_float01, voxel_size=0.05)
     return points, colors_float01
 
 
