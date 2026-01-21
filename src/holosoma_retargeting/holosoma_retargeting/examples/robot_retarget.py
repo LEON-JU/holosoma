@@ -79,6 +79,37 @@ TaskType = Literal["robot_only", "object_interaction", "climbing"]
 # ----------------------------- Helper Functions -----------------------------
 
 
+def _load_contact_sequences(
+    data_path: Path, task_name: str, toe_names: tuple[str, str], num_frames: int, threshold: float = 0.3
+) -> list[dict[str, bool]] | None:
+    contact_path = data_path / f"{task_name}_contact.npz"
+    if not contact_path.exists():
+        return None
+
+    data = np.load(str(contact_path))
+    logits = data.get("static_conf_logits")
+    if logits is None:
+        return None
+    logits = np.asarray(logits, dtype=np.float32)
+    if logits.ndim != 2 or logits.shape[1] < 4:
+        return None
+
+    sigmoid = 1.0 / (1.0 + np.exp(-logits))
+    contact = sigmoid > float(threshold)
+
+    n = min(num_frames, contact.shape[0])
+    contact = contact[:n]
+    sequences = []
+    for i in range(n):
+        left_contact = bool(contact[i, 0] or contact[i, 1])
+        right_contact = bool(contact[i, 2] or contact[i, 3])
+        sequences.append({toe_names[0]: left_contact, toe_names[1]: right_contact})
+    if n < num_frames:
+        last = sequences[-1] if sequences else {toe_names[0]: False, toe_names[1]: False}
+        sequences.extend([last] * (num_frames - n))
+    return sequences
+
+
 def create_task_constants(
     robot_config: RobotConfig,
     motion_data_config: MotionDataConfig,
@@ -706,7 +737,13 @@ def main(cfg: RetargetingConfig) -> None:
     )
 
     # Extract foot sticking sequences
-    foot_sticking_sequences = extract_foot_sticking_sequence_velocity(human_joints, retargeter.demo_joints, toe_names)
+    foot_sticking_sequences = _load_contact_sequences(
+        data_path, task_name, toe_names, num_frames=human_joints.shape[0]
+    )
+    if foot_sticking_sequences is None:
+        foot_sticking_sequences = extract_foot_sticking_sequence_velocity(
+            human_joints, retargeter.demo_joints, toe_names
+        )
 
     # Task-specific foot sticking adjustments
     if task_type == "object_interaction":

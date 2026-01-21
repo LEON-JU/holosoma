@@ -73,6 +73,25 @@ def _compute_vertical_bias_z_min_from_intermimic_pt(
     return z_min
 
 
+def _save_contact_logits(pt_path: Path, out_path: Path) -> None:
+    results = torch.load(str(pt_path), map_location="cpu", weights_only=False)
+    logits: list[np.ndarray] = []
+    for frame_data in results:
+        if isinstance(frame_data, dict) and frame_data.get("static_conf_logits") is not None:
+            conf = np.asarray(frame_data["static_conf_logits"], dtype=np.float32).reshape(-1)
+            logits.append(conf)
+        else:
+            logits.append(np.zeros(6, dtype=np.float32))
+    if not logits:
+        raise ValueError(f"No frames found when extracting contact logits from {pt_path}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        str(out_path),
+        static_conf_logits=np.stack(logits, axis=0),
+        smplx_joint_ids=np.asarray([7, 10, 8, 11, 20, 21], dtype=np.int64),
+    )
+
+
 def main(args: PipelineArgs) -> None:
     paths = get_sequence_paths(seq=args.seq, robot=args.robot, manual=args.manual)
     ensure_run_dirs(paths)
@@ -115,6 +134,9 @@ def main(args: PipelineArgs) -> None:
         constant_scale_factor=1.0,
     )
     prepare_retarget.main(prep_cfg)
+
+    contact_npz_path = paths.prepared_data_dir / f"{args.seq}_contact.npz"
+    _save_contact_logits(paths.all_results_video, contact_npz_path)
 
     # This is the vertical bias printed by `src/utils.py:preprocess_motion_data` (before scaling).
     vertical_bias_z_min_human_m = _compute_vertical_bias_z_min_from_intermimic_pt(paths.prepared_pt_path)
