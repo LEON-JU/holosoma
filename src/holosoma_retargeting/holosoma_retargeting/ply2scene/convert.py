@@ -28,6 +28,10 @@ class Ply2SceneConfig:
     roi_half_extent_m: float = 2.0
     depth_gradient_threshold_m: float = 0.05
 
+    # Morphological operations for mask edge filtering
+    morphology_kernel_size: int = 5
+    """Size of the rectangular kernel for morphological operations on mask edges."""
+
     # Density control + normals
     voxel_size: float = 0.1
     voxel_max_points_per_cell: int = 20
@@ -154,6 +158,10 @@ def _points_from_rgbd(paths, T_align: np.ndarray, cfg: Ply2SceneConfig) -> tuple
         if mask_file.exists():
             mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
             scene_keep_mask = mask > 0
+            # Apply morphological erosion to remove noisy edge pixels
+            if cfg.morphology_kernel_size > 1:
+                kernel = np.ones((cfg.morphology_kernel_size, cfg.morphology_kernel_size), np.uint8)
+                scene_keep_mask = cv2.erode(scene_keep_mask.astype(np.uint8), kernel) > 0
             if scene_keep_mask is not None:
                 scene_keep_mask = scene_keep_mask & valid_mask
         else:
