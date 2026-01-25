@@ -25,7 +25,7 @@ class Ply2SceneConfig:
 
     # Point cloud generation
     max_points: int = 2_000_000
-    roi_half_extent_m: float = 2.0
+    roi_half_extent_m: float = 1.0
     depth_gradient_threshold_m: float = 0.05
 
     # Morphological operations for mask edge filtering
@@ -45,15 +45,9 @@ class Ply2SceneConfig:
     poisson_depth_final: int = 9
     poisson_density_quantile: float = 0.02
     bpa_radii: tuple[float, float, float] = (0.03, 0.06, 0.12)
-    hole_grid_size_m: float = 0.1
-    hole_idw_k: int = 8
-    hole_idw_eps: float = 1e-4
 
     # Post-processing
     crop_to_aabb: bool = True
-    simplify_collision: bool = True
-    collision_decimation_ratio: float = 0.1
-    collision_min_triangles: int = 10_000
 
     # Scale handling
     mesh_scale_factor: Optional[float] = None

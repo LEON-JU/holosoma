@@ -139,6 +139,7 @@ def main(cfg: PreviewConfig) -> None:
             faces=f,
             color=(180, 180, 180),
             opacity=float(cfg.mesh_opacity),
+            side=2,  # 2 = THREE.DoubleSide, show both sides of the mesh
         )
 
     mjcf_handles: list = []
@@ -155,6 +156,7 @@ def main(cfg: PreviewConfig) -> None:
                 faces=f,
                 color=(50, 150, 255),
                 opacity=float(cfg.mesh_opacity),
+                wireframe = True
             )
             mjcf_handles.append(h)
 
