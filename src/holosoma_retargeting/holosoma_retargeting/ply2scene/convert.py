@@ -66,7 +66,7 @@ class Ply2SceneConfig:
     hole_fill_knn: int = 512
     hole_fill_power: float = 1.5
     hole_fill_top_z_margin_m: float = 10.0
-    hole_fill_max_points: int = 300_000
+    hole_fill_max_points: int = 200_000
     hole_fill_use_convex_hull: bool = True
 
     # Post-processing
