@@ -155,8 +155,7 @@ def main(cfg: PreviewConfig) -> None:
                 vertices=v,
                 faces=f,
                 color=(50, 150, 255),
-                opacity=float(cfg.mesh_opacity),
-                wireframe = True
+                opacity=float(cfg.mesh_opacity)
             )
             mjcf_handles.append(h)
 
