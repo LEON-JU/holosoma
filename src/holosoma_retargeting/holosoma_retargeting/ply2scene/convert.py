@@ -130,12 +130,15 @@ def _voxel_cap_sample(
     return pts, cols
 
 
-def _points_from_rgbd(paths, T_align: np.ndarray, cfg: Ply2SceneConfig) -> tuple[np.ndarray, np.ndarray | None]:
+def _points_from_rgbd(
+    paths, T_align: np.ndarray, cfg: Ply2SceneConfig
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
     avg_scene_scale = ground_alignment.load_scale_factor(str(paths.depth_recovered), str(paths.all_results_video))
     frame_dirs = sorted(paths.results_dir.glob("[0-9][0-9][0-9][0-9]"))
 
     all_points: list[np.ndarray] = []
     all_colors: list[np.ndarray] = []
+    first_center: np.ndarray | None = None
 
     for frame_dir in frame_dirs:
         frame_id = frame_dir.name
@@ -200,6 +203,8 @@ def _points_from_rgbd(paths, T_align: np.ndarray, cfg: Ply2SceneConfig) -> tuple
             center = np.median(v_world, axis=0)
         else:
             center = np.median(pts, axis=0)
+        if first_center is None:
+            first_center = center.astype(np.float64)
 
         extent = np.asarray(cfg.roi_half_extent_m, dtype=np.float64)
         if extent.shape != (3,):
@@ -229,7 +234,7 @@ def _points_from_rgbd(paths, T_align: np.ndarray, cfg: Ply2SceneConfig) -> tuple
         if colors is not None:
             colors = colors[idx]
 
-    return points.astype(np.float64), colors
+    return points.astype(np.float64), colors, first_center
 
 
 def _prepare_point_cloud(
@@ -477,6 +482,36 @@ def _postprocess_mesh(
     return mesh
 
 
+def _orient_mesh_towards_point(
+    mesh: o3d.geometry.TriangleMesh, center: np.ndarray, cfg: Ply2SceneConfig
+) -> o3d.geometry.TriangleMesh:
+    if len(mesh.triangles) == 0 or len(mesh.vertices) == 0:
+        return mesh
+
+    center = center.astype(np.float64)
+    target = np.array(
+        [center[0], center[1], center[2] + float(cfg.hole_fill_top_z_margin_m)],
+        dtype=np.float64,
+    )
+
+    triangles = np.asarray(mesh.triangles).astype(np.int64)
+    vertices = np.asarray(mesh.vertices).astype(np.float64)
+    v0 = vertices[triangles[:, 0]]
+    v1 = vertices[triangles[:, 1]]
+    v2 = vertices[triangles[:, 2]]
+    normals = np.cross(v1 - v0, v2 - v0)
+    centers = (v0 + v1 + v2) / 3.0
+    to_target = target[None, :] - centers
+    flip = np.einsum("ij,ij->i", normals, to_target) < 0
+    if np.any(flip):
+        tmp = triangles[flip, 1].copy()
+        triangles[flip, 1] = triangles[flip, 2]
+        triangles[flip, 2] = tmp
+        mesh.triangles = o3d.utility.Vector3iVector(triangles.astype(np.int32))
+        mesh.compute_vertex_normals()
+    return mesh
+
+
 def _reconstruct_mesh(pcd: o3d.geometry.PointCloud, cfg: Ply2SceneConfig, *, depth: int) -> o3d.geometry.TriangleMesh:
     if cfg.use_ball_pivoting:
         radii = o3d.utility.DoubleVector([float(r) for r in cfg.bpa_radii])
@@ -569,7 +604,7 @@ def main(cfg: Ply2SceneConfig) -> None:
     if scale is None:
         scale = _load_scale_factor(paths.pipeline_config_json)
 
-    points, colors = _points_from_rgbd(paths, T_align, cfg)
+    points, colors, first_center = _points_from_rgbd(paths, T_align, cfg)
     method = _select_mesh_method(cfg)
     hole_fill_points_count = 0
 
@@ -593,6 +628,8 @@ def main(cfg: Ply2SceneConfig) -> None:
         normals = _orient_normals_towards_top_view(pts, cfg)
         mesh_coarse, recon = _nksr_reconstruct(pts, normals, cfg)
         mesh_coarse = _postprocess_mesh(mesh_coarse, cfg, crop_aabb=crop_aabb)
+        if first_center is not None:
+            mesh_coarse = _orient_mesh_towards_point(mesh_coarse, first_center, cfg)
 
         mesh_final = mesh_coarse
         if cfg.nksr_two_round:
@@ -604,6 +641,8 @@ def main(cfg: Ply2SceneConfig) -> None:
                 combined_normals = np.concatenate([normals, fill_normals], axis=0)
                 mesh_final, _ = _nksr_reconstruct(combined_pts, combined_normals, cfg, reconstructor=recon)
                 mesh_final = _postprocess_mesh(mesh_final, cfg, crop_aabb=crop_aabb)
+                if first_center is not None:
+                    mesh_final = _orient_mesh_towards_point(mesh_final, first_center, cfg)
 
         mesh_visual = mesh_final
         mesh_collision = mesh_visual
