@@ -1,3 +1,19 @@
+# Installation
+
+```
+python -m pip install --no-cache-dir torch==2.4.0+cu118 torchvision==0.19.0+cu118 torchaudio==2.4.0+cu118 --index-url https://download.pytorch.org/whl/cu118
+python -m pip install --no-cache-dir torch_scatter -f https://data.pyg.org/whl/torch-2.4.0+cu118.html
+git clone https://github.com/nv-tlabs/NKSR.git
+cd NKSR
+pip install "python-pycg[all]"
+pip install randomname pykdtree plyfile flatten-dict pyntcloud
+export MAX_JOBS=16
+pip install --no-build-isolation -v package/
+```
+refer to issue of videomimic: https://github.com/hongsukchoi/VideoMimic/issues/9
+download prebuilt nksr from https://nksr.s3.ap-northeast-1.amazonaws.com/whl/torch-2.0.0%2Bcu118.html
+download ks.pt from https://drive.google.com/file/d/11iPBBJ4Tj4mUaHGnhSr_uWstQxWU3fPj/view
+
 # ply2scene
 
 `ply2scene` 用于把 Holosoma 的 RGBD 重建结果拼接成场景点云，并重建出可用于仿真/可视化的静态场景网格，最终导出：
