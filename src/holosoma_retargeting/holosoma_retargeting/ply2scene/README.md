@@ -88,6 +88,12 @@ python -m holosoma_retargeting.ply2scene.viser_preview \
 
 常用参数：
 - `--show-points`：显示点云（默认关闭）
+- `--scene-source {rgbd,fused_ply,aligned_ply,ply}`：点云来源
+  - `rgbd`：从 RGBD 拼接（原默认行为）
+  - `fused_ply`：使用 `fused_scene.ply`（会应用对齐矩阵）
+  - `aligned_ply`：使用 `aligned_scene_manual_<seq>.ply`（已对齐，不再重复对齐）
+  - `ply`：使用 `--scene-ply <path>` 指定的 PLY
+- `--scene-ply`：当 `--scene-source ply` 时提供
 - `--max-points`：预览点云下采样
 - `--apply-scale-factor/--no-apply-scale-factor`：是否应用 `pipeline_config_json` 里的 `scale_factor`
 - `--point-size` / `--mesh-opacity`

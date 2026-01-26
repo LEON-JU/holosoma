@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 import open3d as o3d
@@ -24,6 +24,8 @@ class PreviewConfig:
 
     scene_obj: Optional[Path] = None
     scene_xml: Optional[Path] = None
+    scene_ply: Optional[Path] = None
+    scene_source: Literal["rgbd", "fused_ply", "aligned_ply", "ply"] = "rgbd"
 
     max_points: int = 150_000
     show_points: bool = False
@@ -59,6 +61,24 @@ def _points_from_rgbd(paths, T_align: np.ndarray, max_points: int) -> tuple[np.n
     )
     points = ground_alignment.opencv_to_z_up(points_cv)
     points = ground_alignment.apply_transform_matrix(points, T_align)
+    if points.shape[0] > max_points:
+        idx = np.random.choice(points.shape[0], size=max_points, replace=False)
+        points = points[idx]
+        if colors is not None:
+            colors = colors[idx]
+    return points.astype(np.float64), colors
+
+
+def _points_from_ply(path: Path, *, apply_z_up: bool, T_align: Optional[np.ndarray], max_points: int) -> tuple[np.ndarray, np.ndarray | None]:
+    if not path.exists():
+        raise FileNotFoundError(f"PLY not found: {path}")
+    pcd = o3d.io.read_point_cloud(str(path))
+    points = np.asarray(pcd.points, dtype=np.float64)
+    colors = np.asarray(pcd.colors, dtype=np.float32) if pcd.has_colors() else None
+    if apply_z_up:
+        points = ground_alignment.opencv_to_z_up(points)
+    if T_align is not None:
+        points = ground_alignment.apply_transform_matrix(points, T_align)
     if points.shape[0] > max_points:
         idx = np.random.choice(points.shape[0], size=max_points, replace=False)
         points = points[idx]
@@ -112,13 +132,37 @@ def main(cfg: PreviewConfig) -> None:
 
     pc_handle = None
     if cfg.show_points:
-        points, colors = _points_from_rgbd(paths, T_align, cfg.max_points)
+        if cfg.scene_source == "rgbd":
+            points, colors = _points_from_rgbd(paths, T_align, cfg.max_points)
+        else:
+            if cfg.scene_source == "fused_ply":
+                ply_path = paths.fused_scene_ply
+                apply_z_up = True
+                apply_T = True
+            elif cfg.scene_source == "aligned_ply":
+                ply_path = paths.aligned_scene_ply
+                apply_z_up = False
+                apply_T = False
+            else:
+                ply_path = cfg.scene_ply
+                apply_z_up = True
+                apply_T = True
+            if ply_path is None:
+                raise ValueError("scene_ply must be provided when scene_source='ply'")
+            points, colors = _points_from_ply(
+                ply_path,
+                apply_z_up=apply_z_up,
+                T_align=T_align if apply_T else None,
+                max_points=cfg.max_points,
+            )
         if cfg.apply_scale_factor:
             points *= float(scale)
 
         colors_uint8 = None
         if colors is not None and colors.size > 0:
             colors_uint8 = (np.clip(colors, 0.0, 1.0) * 255.0).astype(np.uint8)
+        elif points.size > 0:
+            colors_uint8 = np.full((points.shape[0], 3), 180, dtype=np.uint8)
 
         pc_handle = server.scene.add_point_cloud(
             "/scene/points",

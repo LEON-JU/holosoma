@@ -25,18 +25,18 @@ class Ply2SceneConfig:
 
     # Point cloud generation
     max_points: int = 2_000_000
-    roi_half_extent_m: float = 1
+    roi_half_extent_m: tuple[float, float, float] = (0.7, 0.7, 1.0)
 
     # Morphological operations for mask edge filtering
-    morphology_kernel_size: int = 3
+    morphology_kernel_size: int = 5
     """Size of the rectangular kernel for morphological operations on mask edges."""
 
     # Density control + normals--nksr-config
-    voxel_size: float = 0.05
-    voxel_max_points_per_cell: int = 20
-    normal_radius: float = 0.2
-    normal_max_nn: int = 30
-    orient_normals_k: int = 30
+    voxel_size: float = 0.03
+    voxel_max_points_per_cell: int = 50
+    normal_radius: float = 0.5
+    normal_max_nn: int = 60
+    orient_normals_k: int = 60
 
     # Reconstruction
     mesh_method: Literal["auto", "poisson", "nksr"] = "nksr"
@@ -63,10 +63,10 @@ class Ply2SceneConfig:
     """If set, randomly subsample input points for NKSR (speed/memory)."""
 
     hole_fill_resolution: int = 1024
-    hole_fill_knn: int = 512
-    hole_fill_power: float = 1.5
+    hole_fill_knn: int = 128
+    hole_fill_power: float = 1
     hole_fill_top_z_margin_m: float = 10.0
-    hole_fill_max_points: int = 200_000
+    hole_fill_max_points: int = 2_000_000
     hole_fill_use_convex_hull: bool = True
 
     # Post-processing
@@ -201,8 +201,10 @@ def _points_from_rgbd(paths, T_align: np.ndarray, cfg: Ply2SceneConfig) -> tuple
         else:
             center = np.median(pts, axis=0)
 
-        extent = float(cfg.roi_half_extent_m)
-        keep = np.all(np.abs(pts - center[None, :]) <= extent, axis=1)
+        extent = np.asarray(cfg.roi_half_extent_m, dtype=np.float64)
+        if extent.shape != (3,):
+            raise ValueError(f"roi_half_extent_m must be a 3-tuple (x, y, z), got {extent}")
+        keep = np.all(np.abs(pts - center[None, :]) <= extent[None, :], axis=1)
         pts = pts[keep]
         cols = cols[keep] if cols is not None else None
 
