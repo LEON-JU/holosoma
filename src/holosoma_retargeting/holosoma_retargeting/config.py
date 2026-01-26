@@ -44,9 +44,13 @@ class PipelineArgs:
     seq: SeqName
     robot: RobotType = "g1"
     human_height_m: float = 1.7
+    retarget_mode: Literal["robot_only", "climbing_scene"] = "robot_only"
+    """Select retarget pipeline mode."""
+    robot_urdf_file: Path | None = None
+    """Optional override for robot URDF (useful for climbing)."""
 
     # Ground alignment behavior
-    run_ground_alignment: bool = True
+    run_ground_alignment: bool = False
     """If True, opens Viser UI and writes `transform.json`."""
 
     # Manual path overrides (deploy-time)

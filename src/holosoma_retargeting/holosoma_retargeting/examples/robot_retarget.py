@@ -307,9 +307,8 @@ def load_motion_data(
             raise FileNotFoundError(f"No .npy file found in {task_dir}")
 
         npy_file = npy_files[0]
-        # MOCAP-specific downsample factor
-        downsample = 4
-        human_joints = np.load(str(npy_file))[::downsample]
+        # no downsample here
+        human_joints = np.load(str(npy_file))
         num_frames = human_joints.shape[0]
         object_poses = np.tile(np.array([[1, 0, 0, 0, 0, 0, 0]]), (num_frames, 1))
         if custom_scale_factor is not None:
@@ -379,6 +378,42 @@ def setup_object_data(
         constants.SCENE_XML_FILE = str(scene_xml_file)
 
         np.random.seed(0)
+        scene_mesh_path = object_dir / "meshes" / "scene_collision.obj"
+        if not scene_mesh_path.exists():
+            scene_mesh_path = object_dir / "scene_collision.obj"
+        scene_xml_path = object_dir / "robot_scene.xml"
+        scene_urdf_path = object_dir / "scene.urdf"
+        is_scene_terrain = scene_mesh_path.exists() or scene_xml_path.exists() or scene_urdf_path.exists()
+
+        if is_scene_terrain:
+            if scene_xml_path.exists():
+                constants.SCENE_XML_FILE = str(scene_xml_path)
+
+            if task_config.scene_sampling_mode == "height_bias":
+                surface_weights = lambda p: (  # noqa: E731
+                    task_config.surface_weight_high
+                    if p[2] > task_config.surface_weight_threshold
+                    else task_config.surface_weight_low
+                )
+            else:
+                # near_human_bias is reserved for future use; default to uniform sampling for now.
+                surface_weights = None
+
+            sample_count = task_config.scene_sample_count_base
+            if task_config.scene_sample_count_add_ground:
+                sample_count += task_config.climbing_ground_size * task_config.climbing_ground_size
+
+            object_local_pts, object_local_pts_demo_original = load_object_data(
+                str(scene_mesh_path),
+                smpl_scale=smpl_scale,
+                surface_weights=surface_weights,
+                sample_count=sample_count,
+            )
+            object_local_pts_demo = object_local_pts_demo_original
+            object_local_pts = object_local_pts_demo
+            object_urdf_file = str(scene_urdf_path) if scene_urdf_path.exists() else None
+            return object_local_pts, object_local_pts_demo, object_urdf_file
+
         print("object mesh file: ", constants.OBJECT_MESH_FILE)
         object_local_pts, object_local_pts_demo_original = load_object_data(
             constants.OBJECT_MESH_FILE,

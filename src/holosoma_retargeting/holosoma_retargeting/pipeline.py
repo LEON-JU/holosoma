@@ -11,7 +11,7 @@ Runs the end-to-end flow:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -30,8 +30,10 @@ from holosoma_retargeting.config import (
 )
 from holosoma_retargeting.config_types.retargeting import RetargetingConfig
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
+from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.examples import robot_retarget
 from holosoma_retargeting.config_types.data_type import SMPLH_DEMO_JOINTS
+from holosoma_retargeting.ply2scene.scene_xml import build_robot_scene_xml, create_scaled_scene_urdf
 
 
 def _load_transform_json(path: Path) -> np.ndarray:
@@ -121,39 +123,114 @@ def main(args: PipelineArgs) -> None:
             raise FileNotFoundError(f"run_ground_alignment=False but transform not found: {paths.ground_transform_json}")
         T_align = _load_transform_json(paths.ground_transform_json)
 
-    # 2) Prepare retarget data (InterMimic-style `.pt`)
-    prep_cfg = prepare_retarget.PrepareRetargetConfig(
-        input_all_results_path=paths.all_results_video,
-        output_pt_path=paths.prepared_pt_path,
-        smpl_model_path=args.manual.smpl_model_path,
-        device="cpu",
-        transform_matrix=T_align,
-        scale_factors_path=paths.depth_recovered,
-        # Scene scale recovery (NOT robot/human scaling): use recovered depth scale factors.
-        scale_mode="average",
-        constant_scale_factor=1.0,
-    )
-    prepare_retarget.main(prep_cfg)
+    # 2) Prepare retarget data
+    if args.retarget_mode == "robot_only":
+        prep_cfg = prepare_retarget.PrepareRetargetConfig(
+            input_all_results_path=paths.all_results_video,
+            output_pt_path=paths.prepared_pt_path,
+            smpl_model_path=args.manual.smpl_model_path,
+            device="cpu",
+            transform_matrix=T_align,
+            scale_factors_path=paths.depth_recovered,
+            # Scene scale recovery (NOT robot/human scaling): use recovered depth scale factors.
+            scale_mode="average",
+            constant_scale_factor=1.0,
+        )
+        prepare_retarget.main(prep_cfg)
+    elif args.retarget_mode == "climbing_scene":
+        video_results = torch.load(str(paths.all_results_video), map_location="cpu", weights_only=False)
+        new_video_results = prepare_retarget.compute_smplx_joints(
+            video_results,
+            smpl_model_path=str(args.manual.smpl_model_path),
+            device="cpu",
+            gender="male",
+            use_face_contour=True,
+        )
+        mocap = prepare_retarget.convert_smplx_results_to_mocap(
+            new_video_results,
+            transform_matrix=T_align,
+            scale_factors_path=str(paths.depth_recovered),
+            scale_mode="average",
+            constant_scale_factor=1.0,
+        )
+        task_dir = paths.prepared_data_dir / args.seq
+        task_dir.mkdir(parents=True, exist_ok=True)
+        np.save(str(task_dir / f"{args.seq}.npy"), mocap)
+    else:
+        raise ValueError(f"Unknown retarget_mode: {args.retarget_mode}")
 
     contact_npz_path = paths.prepared_data_dir / f"{args.seq}_contact.npz"
     _save_contact_logits(paths.all_results_video, contact_npz_path)
 
-    # This is the vertical bias printed by `src/utils.py:preprocess_motion_data` (before scaling).
-    vertical_bias_z_min_human_m = _compute_vertical_bias_z_min_from_intermimic_pt(paths.prepared_pt_path)
-    vertical_bias_z_min_robot_m = vertical_bias_z_min_human_m * scale_factor
+    if args.retarget_mode == "robot_only":
+        # This is the vertical bias printed by `src/utils.py:preprocess_motion_data` (before scaling).
+        vertical_bias_z_min_human_m = _compute_vertical_bias_z_min_from_intermimic_pt(paths.prepared_pt_path)
+        vertical_bias_z_min_robot_m = vertical_bias_z_min_human_m * scale_factor
+    else:
+        vertical_bias_z_min_human_m = None
+        vertical_bias_z_min_robot_m = None
 
-    # 3) Retarget (robot_only, smplh)
-    rt_cfg = RetargetingConfig(
-        task_type="robot_only",
-        robot=args.robot,
-        data_format="smplh",
-        task_name=f"{args.seq}",
-        data_path=paths.prepared_data_dir,
-        save_dir=paths.retarget_save_dir,
-        augmentation=False,
-        custom_scale_factor=scale_factor,
-        retargeter=RetargeterConfig(visualize=True, debug=True),
-    )
+    # 3) Retarget
+    if args.retarget_mode == "robot_only":
+        rt_cfg = RetargetingConfig(
+            task_type="robot_only",
+            robot=args.robot,
+            data_format="smplh",
+            task_name=f"{args.seq}",
+            data_path=paths.prepared_data_dir,
+            save_dir=paths.retarget_save_dir,
+            augmentation=False,
+            custom_scale_factor=scale_factor,
+            retargeter=RetargeterConfig(visualize=True, debug=True),
+        )
+    else:
+        task_dir = paths.prepared_data_dir / args.seq
+        scene_pkg_dir = paths.run_dir / "artifacts" / "ply2scene" / "scene"
+        if not scene_pkg_dir.exists():
+            raise FileNotFoundError(f"Scene package not found: {scene_pkg_dir} (run ply2scene.convert first)")
+
+        robot_config = RobotConfig(robot_type=args.robot)
+        robot_urdf_path = Path(args.robot_urdf_file) if args.robot_urdf_file is not None else Path(
+            robot_config.ROBOT_URDF_FILE
+        )
+        if not robot_urdf_path.is_absolute():
+            package_root = Path(__file__).resolve().parents[1]
+            robot_urdf_path = package_root / robot_urdf_path
+
+        robot_xml_path = robot_urdf_path.with_suffix(".xml")
+        if not robot_xml_path.exists():
+            raise FileNotFoundError(f"Robot XML not found: {robot_xml_path}")
+
+        # Build (or refresh) robot+scene MJCF inside the ply2scene output directory.
+        build_robot_scene_xml(
+            robot_xml_path,
+            scene_pkg_dir,
+            scene_pkg_dir,
+            scale=scale_factor,
+            output_name="robot_scene.xml",
+            disable_plane_ground=True,
+        )
+
+        scene_urdf_src = scene_pkg_dir / "scene.urdf"
+        if not scene_urdf_src.exists():
+            raise FileNotFoundError(f"Scene URDF not found: {scene_urdf_src}")
+        create_scaled_scene_urdf(scene_urdf_src, scale_factor, output_path=scene_urdf_src)
+
+        rt_cfg = RetargetingConfig(
+            task_type="climbing",
+            robot=args.robot,
+            data_format="mocap",
+            task_name=f"{args.seq}",
+            data_path=paths.prepared_data_dir,
+            save_dir=paths.retarget_save_dir,
+            augmentation=False,
+            custom_scale_factor=scale_factor,
+            retargeter=RetargeterConfig(visualize=True, debug=True),
+        )
+        # NOTE: motion is read from `data_path/task_name` (task_dir), but scene assets are read from `object_dir`.
+        rt_cfg.task_config = replace(rt_cfg.task_config, object_name="scene", object_dir=scene_pkg_dir)
+        rt_cfg.robot_config = replace(rt_cfg.robot_config, robot_urdf_file=str(robot_urdf_path))
+
     robot_retarget.main(rt_cfg)
 
     # 4) Save run summary for downstream tools
@@ -162,6 +239,7 @@ def main(args: PipelineArgs) -> None:
         "robot": args.robot,
         "human_height_m": args.human_height_m,
         "scale_factor": scale_factor,
+        "retarget_mode": args.retarget_mode,
         "vertical_bias_z_min_human_m": vertical_bias_z_min_human_m,
         "vertical_bias_z_min_robot_m": vertical_bias_z_min_robot_m,
         "paths": {k: str(v) for k, v in asdict(paths).items()},

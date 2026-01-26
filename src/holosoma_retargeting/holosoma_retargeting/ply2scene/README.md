@@ -14,6 +14,20 @@ refer to issue of videomimic: https://github.com/hongsukchoi/VideoMimic/issues/9
 download prebuilt nksr from https://nksr.s3.ap-northeast-1.amazonaws.com/whl/torch-2.0.0%2Bcu118.html
 download ks.pt from https://drive.google.com/file/d/11iPBBJ4Tj4mUaHGnhSr_uWstQxWU3fPj/view
 
+# Running Conversion
+'''
+ python -m holosoma_retargeting.ply2scene.convert \                       
+  --seq smooth --robot g1
+'''
+
+'''
+python -m holosoma_retargeting.ply2scene.viser_preview \                 
+  --seq smooth --robot g1 \
+  --scene_obj /home/juyiang/data/holosoma_runs/smooth/g1/artifacts/ply2scene/scene/meshes/scene_visual.obj \
+  --scene_xml /home/juyiang/data/holosoma_runs/smooth/g1/artifacts/ply2scene/scene/scene.xml \
+  --show-points
+'''
+
 # ply2scene
 
 `ply2scene` 用于把 Holosoma 的 RGBD 重建结果拼接成场景点云，并重建出可用于仿真/可视化的静态场景网格，最终导出：
