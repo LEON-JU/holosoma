@@ -146,16 +146,15 @@ def main(args: PipelineArgs) -> None:
             gender="male",
             use_face_contour=True,
         )
-        mocap = prepare_retarget.convert_smplx_results_to_mocap(
+        smplx_npz = prepare_retarget.convert_smplx_results_to_smplx_npz(
             new_video_results,
             transform_matrix=T_align,
             scale_factors_path=str(paths.depth_recovered),
             scale_mode="average",
             constant_scale_factor=1.0,
         )
-        task_dir = paths.prepared_data_dir / args.seq
-        task_dir.mkdir(parents=True, exist_ok=True)
-        np.save(str(task_dir / f"{args.seq}.npy"), mocap)
+        npz_path = paths.prepared_data_dir / f"{args.seq}.npz"
+        np.savez(str(npz_path), **smplx_npz)
     else:
         raise ValueError(f"Unknown retarget_mode: {args.retarget_mode}")
 
@@ -208,7 +207,7 @@ def main(args: PipelineArgs) -> None:
             scene_pkg_dir,
             scale=scale_factor,
             output_name="robot_scene.xml",
-            disable_plane_ground=True,
+            disable_plane_ground=False,
         )
 
         scene_urdf_src = scene_pkg_dir / "scene.urdf"
@@ -219,7 +218,7 @@ def main(args: PipelineArgs) -> None:
         rt_cfg = RetargetingConfig(
             task_type="climbing",
             robot=args.robot,
-            data_format="mocap",
+            data_format="smplx",
             task_name=f"{args.seq}",
             data_path=paths.prepared_data_dir,
             save_dir=paths.retarget_save_dir,

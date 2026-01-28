@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_DATA_FORMATS = {
     "robot_only": "smplh",
     "object_interaction": "smplh",
-    "climbing": "mocap",
+    "climbing": "smplx",
 }
 
 DEFAULT_SAVE_DIRS = {
@@ -82,6 +82,7 @@ TaskType = Literal["robot_only", "object_interaction", "climbing"]
 def _load_contact_sequences(
     data_path: Path, task_name: str, toe_names: tuple[str, str], num_frames: int, threshold: float = 0.3
 ) -> list[dict[str, bool]] | None:
+    return None
     contact_path = data_path / f"{task_name}_contact.npz"
     if not contact_path.exists():
         return None
@@ -138,6 +139,15 @@ def create_task_constants(
     for attr, value in motion_data_config.legacy_constants().items():
         setattr(task_constants, attr, value)
 
+    # Adjust SMPL-X hand link mapping for spherehand models if needed.
+    if task_type == "climbing" and motion_data_config.data_format == "smplx":
+        urdf_name = Path(robot_config.ROBOT_URDF_FILE).name
+        if "spherehand" in urdf_name:
+            mapping = dict(task_constants.JOINTS_MAPPING)
+            mapping["L_Wrist"] = "left_sphere_hand_link"
+            mapping["R_Wrist"] = "right_sphere_hand_link"
+            task_constants.JOINTS_MAPPING = mapping
+
     # Task-specific object setup
     if task_type == "robot_only":
         obj_name = task_config.object_name or "ground"
@@ -181,8 +191,8 @@ def validate_config(cfg: RetargetingConfig) -> None:
         )
 
     # Task-specific format requirements
-    if cfg.task_type == "climbing" and cfg.data_format not in (None, "mocap"):
-        raise ValueError("Climbing task requires 'mocap' data format")
+    if cfg.task_type == "climbing" and cfg.data_format not in (None, "smplx"):
+        raise ValueError("Climbing task requires 'smplx' data format")
     if cfg.task_type == "object_interaction" and cfg.data_format not in (None, "smplh"):
         raise ValueError("Object interaction requires 'smplh' data format")
     # robot_only accepts any format in the registry (already validated above)
@@ -301,21 +311,19 @@ def load_motion_data(
         )
 
     elif task_type == "climbing":
-        task_dir = data_path / task_name
-        npy_files = list(task_dir.glob("*.npy"))
-        if not npy_files:
-            raise FileNotFoundError(f"No .npy file found in {task_dir}")
+        npz_file = data_path / f"{task_name}.npz"
+        if not npz_file.exists():
+            task_dir = data_path / task_name
+            npz_file = task_dir / f"{task_name}.npz"
+        if not npz_file.exists():
+            raise FileNotFoundError(f"SMPL-X data file not found: {npz_file}")
 
-        npy_file = npy_files[0]
-        # no downsample here
-        human_joints = np.load(str(npy_file))
+        human_data = np.load(str(npz_file))
+        human_joints = human_data["global_joint_positions"]
+        human_height = human_data["height"]
+        smpl_scale = float(custom_scale_factor) if custom_scale_factor is not None else constants.ROBOT_HEIGHT / human_height
         num_frames = human_joints.shape[0]
         object_poses = np.tile(np.array([[1, 0, 0, 0, 0, 0, 0]]), (num_frames, 1))
-        if custom_scale_factor is not None:
-            smpl_scale = float(custom_scale_factor)
-        else:
-            default_human_height = motion_data_config.default_human_height or 1.78
-            smpl_scale = constants.ROBOT_HEIGHT / default_human_height
 
     logger.debug(
         "Loaded %d frames, scale factor: %.4f",
@@ -400,8 +408,6 @@ def setup_object_data(
                 surface_weights = None
 
             sample_count = task_config.scene_sample_count_base
-            if task_config.scene_sample_count_add_ground:
-                sample_count += task_config.climbing_ground_size * task_config.climbing_ground_size
 
             object_local_pts, object_local_pts_demo_original = load_object_data(
                 str(scene_mesh_path),
@@ -411,6 +417,15 @@ def setup_object_data(
             )
             object_local_pts_demo = object_local_pts_demo_original
             object_local_pts = object_local_pts_demo
+            if task_config.scene_sample_count_add_ground:
+                ground_pts = create_ground_points(
+                    task_config.climbing_ground_range,
+                    task_config.climbing_ground_range,
+                    task_config.climbing_ground_size,
+                )
+                ground_pts_scaled = ground_pts * smpl_scale
+                object_local_pts_demo = np.concatenate([object_local_pts_demo, ground_pts_scaled], axis=0)
+                object_local_pts = object_local_pts_demo
             object_urdf_file = str(scene_urdf_path) if scene_urdf_path.exists() else None
             return object_local_pts, object_local_pts_demo, object_urdf_file
 

@@ -74,15 +74,35 @@ def load_object_data(
 
     if bounding_box_oriented:
         points = obj_mesh.bounding_box_oriented.vertices
-    elif surface_weights is not None:
-        if use_face_normals:
-            # Use face-normal-based weighted sampling
-            points = weighted_surface_sampling_by_face_normal(obj_mesh, sample_count, surface_weights, seed)
-        else:
-            # Use center-based weighted sampling
-            points = weighted_surface_sampling(obj_mesh, sample_count, surface_weights, seed)
     else:
-        points, _ = trimesh.sample.sample_surface_even(obj_mesh, sample_count, seed=seed)
+        remaining = sample_count
+        collected = []
+        attempt_count = max(sample_count, 1)
+        for _ in range(3):
+            if surface_weights is not None:
+                if use_face_normals:
+                    # Use face-normal-based weighted sampling
+                    sampled = weighted_surface_sampling_by_face_normal(obj_mesh, attempt_count, surface_weights, seed)
+                else:
+                    # Use center-based weighted sampling
+                    sampled = weighted_surface_sampling(obj_mesh, attempt_count, surface_weights, seed)
+            else:
+                sampled, _ = trimesh.sample.sample_surface_even(obj_mesh, attempt_count, seed=seed)
+
+            sampled = np.array(sampled)
+
+            if sampled.size > 0:
+                collected.append(sampled)
+                remaining -= sampled.shape[0]
+
+            if remaining <= 0:
+                break
+
+            attempt_count *= 2
+
+        points = np.concatenate(collected, axis=0) if collected else np.empty((0, 3))
+        if points.shape[0] > sample_count:
+            points = points[:sample_count]
 
     points = np.array(points)
     points_scaled = points * smpl_scale

@@ -18,7 +18,7 @@ import smplx
 import torch
 from tqdm import tqdm
 
-from holosoma_retargeting.config_types.data_type import MOCAP_DEMO_JOINTS, SMPLH_DEMO_JOINTS
+from holosoma_retargeting.config_types.data_type import MOCAP_DEMO_JOINTS, SMPLH_DEMO_JOINTS, SMPLX_DEMO_JOINTS
 
 
 # Copied from the legacy script to keep a stable name->index mapping for SMPL-X joints.
@@ -384,6 +384,50 @@ def remap_smplx_to_smplh52(joints_smplx: np.ndarray) -> np.ndarray:
     return joints_smplx[..., _SMPLX_TO_SMPLH52, :]
 
 
+_SMPLX_DEMO_NAME_MAP = {
+    "Pelvis": "pelvis",
+    "L_Hip": "left_hip",
+    "R_Hip": "right_hip",
+    "Spine1": "spine1",
+    "L_Knee": "left_knee",
+    "R_Knee": "right_knee",
+    "Spine2": "spine2",
+    "L_Ankle": "left_ankle",
+    "R_Ankle": "right_ankle",
+    "Spine3": "spine3",
+    "L_Foot": "left_foot",
+    "R_Foot": "right_foot",
+    "Neck": "neck",
+    "L_Collar": "left_collar",
+    "R_Collar": "right_collar",
+    "Head": "head",
+    "L_Shoulder": "left_shoulder",
+    "R_Shoulder": "right_shoulder",
+    "L_Elbow": "left_elbow",
+    "R_Elbow": "right_elbow",
+    "L_Wrist": "left_wrist",
+    "R_Wrist": "right_wrist",
+}
+
+
+def remap_smplx_to_smplx_demo(joints_smplx: np.ndarray) -> np.ndarray:
+    """
+    Args:
+        joints_smplx: (..., J, 3) array using SMPL-X joint order defined by `SMPLX_JOINT_NAMES`.
+    Returns:
+        (..., 22, 3) array in SMPLX_DEMO_JOINTS order.
+    """
+    if joints_smplx.shape[-2] != len(SMPLX_JOINT_NAMES):
+        raise ValueError(
+            f"Unexpected SMPL-X joint count: {joints_smplx.shape[-2]} (expected {len(SMPLX_JOINT_NAMES)})."
+        )
+    indices: list[int] = []
+    for demo_name in SMPLX_DEMO_JOINTS:
+        smplx_name = _SMPLX_DEMO_NAME_MAP[demo_name]
+        indices.append(SMPLX_JOINT_NAMES.index(smplx_name))
+    return joints_smplx[..., indices, :]
+
+
 def _smplx_name_to_index() -> dict[str, int]:
     return {name: idx for idx, name in enumerate(SMPLX_JOINT_NAMES)}
 
@@ -592,6 +636,70 @@ def convert_smplx_results_to_mocap(
         mocap_frames.append(joints_mocap.astype(np.float32))
 
     return np.stack(mocap_frames, axis=0)
+
+
+def convert_smplx_results_to_smplx_npz(
+    video_results: list[dict],
+    *,
+    scale_factors_path: str | Path | None,
+    scale_mode: Literal["constant", "per_frame", "average"] = "constant",
+    constant_scale_factor: float = 1.0,
+    transform_matrix: Optional[np.ndarray] = None,
+) -> dict[str, np.ndarray]:
+    """
+    Convert SMPL-X results to SMPLX_DEMO_JOINTS in world Z-up coordinates.
+
+    Returns:
+        dict with keys:
+          - global_joint_positions: (T, 22, 3)
+          - height: scalar height estimate (meters)
+    """
+    if transform_matrix is None:
+        T_align = np.eye(4, dtype=np.float64)
+    else:
+        T_align = np.asarray(transform_matrix, dtype=np.float64)
+        if T_align.shape != (4, 4):
+            raise ValueError(f"transform_matrix must be 4x4, got {T_align.shape}")
+
+    if scale_mode in {"per_frame", "average"} and scale_factors_path is None:
+        raise ValueError("scale_factors_path is required for scale_mode='per_frame' or 'average'")
+
+    if scale_mode == "average":
+        avg = load_scale_factor_average(scale_factors_path)
+    else:
+        avg = None
+
+    joints_demo_list: list[np.ndarray] = []
+    for frame_idx, frame in enumerate(video_results):
+        if "camera_pose" not in frame:
+            raise KeyError("Missing 'camera_pose' in frame data")
+        if "joints" not in frame:
+            raise KeyError("Missing 'joints' in frame data (run compute_smplx_joints first)")
+
+        camera_pose = np.asarray(frame["camera_pose"], dtype=np.float64)
+        joints_cam = np.asarray(frame["joints"], dtype=np.float64)
+
+        if scale_mode == "constant":
+            s = float(constant_scale_factor)
+        elif scale_mode == "average":
+            s = float(avg)
+        else:  # per_frame
+            s = float(load_scale_factor_for_frame(scale_factors_path, frame_idx))
+
+        joints_world = transform_cam_to_world(joints_cam, camera_pose, scale_translation=s)
+        joints_world = opencv_to_z_up(joints_world)
+        joints_world = apply_transform_matrix(joints_world, T_align)
+
+        joints_demo = remap_smplx_to_smplx_demo(joints_world[None, ...])[0]
+        joints_demo_list.append(joints_demo.astype(np.float32))
+
+    joints_demo = np.stack(joints_demo_list, axis=0)
+    z = joints_demo[..., 2]
+    height = float(z.max() - z.min())
+    return {
+        "global_joint_positions": joints_demo,
+        "height": np.asarray(height, dtype=np.float32),
+    }
 
 
 @dataclass(frozen=True)

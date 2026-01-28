@@ -27,6 +27,11 @@ class Ply2SceneConfig:
     max_points: int = 2_000_000
     roi_half_extent_m: tuple[float, float, float] = (0.7, 0.7, 1.0)
 
+    collision_z_min_m: float | None = None
+    """If set, drop ALL collision-mesh vertices with z < this threshold (meters, z-up)."""
+
+    keep_largest_component: bool = True
+    """If True, keep only the largest connected component in post-processing."""
     # Morphological operations for mask edge filtering
     morphology_kernel_size: int = 5
     """Size of the rectangular kernel for morphological operations on mask edges."""
@@ -457,22 +462,23 @@ def _postprocess_mesh(
     except Exception:
         pass
 
-    # Keep the largest connected component if the API exists.
-    try:
-        triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
-        triangle_clusters = np.asarray(triangle_clusters)
-        cluster_n_triangles = np.asarray(cluster_n_triangles)
-        if cluster_n_triangles.size > 0:
-            largest = int(cluster_n_triangles.argmax())
-            remove_mask = (triangle_clusters != largest).tolist()
-            try:
-                mesh.remove_triangles_by_mask(remove_mask)
-                mesh.remove_unreferenced_vertices()
-            except Exception:
-                keep_triangles = np.where(triangle_clusters == largest)[0]
-                mesh = mesh.select_by_index(keep_triangles, cleanup=True)
-    except Exception:
-        pass
+    if cfg.keep_largest_component:
+        # Keep the largest connected component if the API exists.
+        try:
+            triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
+            triangle_clusters = np.asarray(triangle_clusters)
+            cluster_n_triangles = np.asarray(cluster_n_triangles)
+            if cluster_n_triangles.size > 0:
+                largest = int(cluster_n_triangles.argmax())
+                remove_mask = (triangle_clusters != largest).tolist()
+                try:
+                    mesh.remove_triangles_by_mask(remove_mask)
+                    mesh.remove_unreferenced_vertices()
+                except Exception:
+                    keep_triangles = np.where(triangle_clusters == largest)[0]
+                    mesh = mesh.select_by_index(keep_triangles, cleanup=True)
+        except Exception:
+            pass
 
     try:
         mesh.orient_triangles()
@@ -480,6 +486,39 @@ def _postprocess_mesh(
         pass
     mesh.compute_vertex_normals()
     return mesh
+
+
+def _drop_mesh_vertices_below_z(
+    mesh: o3d.geometry.TriangleMesh,
+    z_min: float,
+    cfg: Ply2SceneConfig,
+) -> o3d.geometry.TriangleMesh:
+    """Hard filter: remove vertices (and any triangles touching them) with z < z_min."""
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    triangles = np.asarray(mesh.triangles, dtype=np.int64)
+    if vertices.size == 0 or triangles.size == 0:
+        return mesh
+
+    keep_v = vertices[:, 2] >= float(z_min)
+    if bool(keep_v.all()):
+        return mesh
+
+    keep_t = keep_v[triangles].all(axis=1)
+    triangles_kept = triangles[keep_t]
+    if triangles_kept.size == 0:
+        return o3d.geometry.TriangleMesh()
+
+    used = np.unique(triangles_kept.reshape(-1))
+    remap = -np.ones(vertices.shape[0], dtype=np.int64)
+    remap[used] = np.arange(used.shape[0], dtype=np.int64)
+
+    new_vertices = vertices[used]
+    new_triangles = remap[triangles_kept]
+
+    out = o3d.geometry.TriangleMesh()
+    out.vertices = o3d.utility.Vector3dVector(new_vertices)
+    out.triangles = o3d.utility.Vector3iVector(new_triangles.astype(np.int32))
+    return _postprocess_mesh(out, cfg)
 
 
 def _orient_mesh_towards_point(
@@ -649,6 +688,19 @@ def main(cfg: Ply2SceneConfig) -> None:
 
     visual_path = meshes_dir / "scene_visual.obj"
     collision_path = meshes_dir / "scene_collision.obj"
+
+    if cfg.collision_z_min_m is not None:
+        z_min = float(cfg.collision_z_min_m)
+        before_v = len(mesh_collision.vertices)
+        before_t = len(mesh_collision.triangles)
+        mesh_collision = _drop_mesh_vertices_below_z(mesh_collision, z_min=z_min, cfg=cfg)
+        after_v = len(mesh_collision.vertices)
+        after_t = len(mesh_collision.triangles)
+        print(
+            f"[ply2scene] collision_z_min_m={z_min:.4f}: "
+            f"verts {before_v}->{after_v}, tris {before_t}->{after_t}"
+        )
+
     o3d.io.write_triangle_mesh(str(visual_path), mesh_visual, write_triangle_uvs=False)
     o3d.io.write_triangle_mesh(str(collision_path), mesh_collision, write_triangle_uvs=False)
 
