@@ -37,8 +37,8 @@ class Ply2SceneConfig:
     """Size of the rectangular kernel for morphological operations on mask edges."""
 
     # Density control + normals--nksr-config
-    voxel_size: float = 0.03
-    voxel_max_points_per_cell: int = 50
+    voxel_size: float = 0.1
+    voxel_max_points_per_cell: int = 20
     normal_radius: float = 0.5
     normal_max_nn: int = 60
     orient_normals_k: int = 60

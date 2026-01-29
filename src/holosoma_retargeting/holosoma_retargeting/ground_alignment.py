@@ -494,6 +494,7 @@ def main(config: dict) -> np.ndarray:
 
     transform_output_path = config.get("transform_output_path")
     exit_process_on_save = bool(config.get("exit_process_on_save", False))
+    max_points = int(config.get("max_points", 200_000))
 
     # Load scene point cloud
     if use_rgbd_scene:
@@ -512,6 +513,12 @@ def main(config: dict) -> np.ndarray:
         points = np.asarray(pcd.points, dtype=np.float64)
         colors_float01 = np.asarray(pcd.colors, dtype=np.float64)
         points = opencv_to_z_up(points)
+
+    if max_points > 0 and points.shape[0] > max_points:
+        idx = np.random.choice(points.shape[0], size=max_points, replace=False)
+        points = points[idx]
+        colors_float01 = colors_float01[idx] if colors_float01 is not None and colors_float01.size else colors_float01
+        print(f"[ground_alignment] Downsampled scene points to {max_points}")
 
     colors_uint8 = (np.clip(colors_float01, 0.0, 1.0) * 255.0).astype(np.uint8)
     colors_uint8_backup = colors_uint8.copy()
@@ -631,6 +638,14 @@ def main(config: dict) -> np.ndarray:
         T_adjusted = state.initial_T_align.copy()
         T_adjusted[2, 3] += float(height_offset)
         return T_adjusted
+
+    def recenter_transform_xy(T: np.ndarray) -> np.ndarray:
+        aligned = apply_transform_matrix(points, T)
+        center_xy = aligned[:, :2].mean(axis=0)
+        T_new = T.copy()
+        T_new[0, 3] -= float(center_xy[0])
+        T_new[1, 3] -= float(center_xy[1])
+        return T_new
 
     def update_aligned_cloud() -> None:
         if state.T_align is None:
@@ -864,6 +879,7 @@ def main(config: dict) -> np.ndarray:
                 client.add_notification(title="Align failed", body=str(e), color="red")
                 return
 
+            T = recenter_transform_xy(T)
             state.initial_T_align = T
             state.T_align = T
             state.height_offset = 0.0
@@ -903,6 +919,7 @@ def main(config: dict) -> np.ndarray:
             height_slider.visible = False
             confirm_height_btn.visible = False
             show_reference_plane(False)
+            update_aligned_cloud()
             client.add_notification(title="Height confirmed", body="Final alignment applied.", color="green")
 
         @save_aligned_btn.on_click

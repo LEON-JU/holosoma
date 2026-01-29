@@ -56,6 +56,7 @@ def _save_transform_json(path: Path, T: np.ndarray, *, seq: str, robot: str) -> 
     with open(path, "w") as f:
         json.dump(payload, f, indent=2)
 
+
 def _compute_vertical_bias_z_min_from_intermimic_pt(
     pt_path: Path,
     *,

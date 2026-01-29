@@ -290,8 +290,8 @@ class ReconViewerConfig:
     qpos_npz: Optional[Path] = None
     robot_urdf: Optional[str] = None
     # Downsampling (remote-friendly defaults)
-    scene_max_points: int = 150_000
-    human_max_points: int = 20_000
+    scene_max_points: int = 40_000
+    human_max_points: int = 10_000
     frame_max_points: int = 20_000
 
 
@@ -300,7 +300,8 @@ def main(cfg: ReconViewerConfig) -> None:
     run_summary = _load_json(paths.pipeline_config_json) if paths.pipeline_config_json.exists() else {}
 
     scale_factor = float(run_summary.get("scale_factor", 1.0))
-    z_min_human = float(run_summary.get("vertical_bias_z_min_human_m", 0.0))
+    z_min_val = run_summary.get("vertical_bias_z_min_human_m", 0.0)
+    z_min_human = float(z_min_val) if z_min_val is not None else 0.0
     T_align = np.asarray(_load_json(paths.ground_transform_json)["transform_matrix"], dtype=np.float64)
 
     qpos_path = cfg.qpos_npz or (paths.retarget_save_dir / f"{cfg.seq}.npz")

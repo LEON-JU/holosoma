@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,13 @@ class TaskConfig:
     surface_weight_threshold: float = 0.9  # z-coordinate threshold for high-weight points
     surface_weight_high: int = 20  # Weight for top surface points (z > threshold)
     surface_weight_low: int = 1  # Weight for other points
+
+    # Scene terrain sampling (climbing task, scene mesh)
+    scene_sample_count_base: int = 100
+    scene_sample_count_add_ground: bool = True
+    scene_sampling_mode: Literal["uniform", "height_bias", "near_human_bias"] = "uniform"
+    near_human_sigma: float = 1.0
+    near_human_weight: float = 10.0
 
     # Object directory (for climbing tasks)
     # Auto-determined from data_path / task_name if None
