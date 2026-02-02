@@ -25,21 +25,26 @@ class Ply2SceneConfig:
 
     # Point cloud generation
     max_points: int = 2_000_000
-    roi_half_extent_m: tuple[float, float, float] = (0.7, 0.7, 1.0)
+    roi_half_extent_m: tuple[float, float, float] = (1.5, 1.5, 1.5)
+    disable_roi_crop: bool = False
+    """If True, skip ROI cropping and use the full accumulated point cloud."""
+
+    depth_gradient_thr: float = 0.01
+    """Depth gradient filtering threshold. Set <=0 to disable."""
 
     collision_z_min_m: float | None = None
-    """If set, drop ALL collision-mesh vertices with z < this threshold (meters, z-up)."""
+    """If set, drop ALL input point-cloud points with z < this threshold (meters, z-up)."""
 
     keep_largest_component: bool = True
     """If True, keep only the largest connected component in post-processing."""
     # Morphological operations for mask edge filtering
-    morphology_kernel_size: int = 5
+    morphology_kernel_size: int = 9
     """Size of the rectangular kernel for morphological operations on mask edges."""
 
     # Density control + normals--nksr-config
-    voxel_size: float = 0.1
-    voxel_max_points_per_cell: int = 20
-    normal_radius: float = 0.5
+    voxel_size: float = 0.05
+    voxel_max_points_per_cell: int = 40
+    normal_radius: float = 0.1
     normal_max_nn: int = 60
     orient_normals_k: int = 60
 
@@ -67,12 +72,12 @@ class Ply2SceneConfig:
     nksr_max_points: Optional[int] = None
     """If set, randomly subsample input points for NKSR (speed/memory)."""
 
-    hole_fill_resolution: int = 1024
-    hole_fill_knn: int = 128
+    hole_fill_resolution: int = 512
+    hole_fill_knn: int = 64
     hole_fill_power: float = 1
-    hole_fill_top_z_margin_m: float = 10.0
+    hole_fill_top_z_margin_m: float = 5.0
     hole_fill_max_points: int = 2_000_000
-    hole_fill_use_convex_hull: bool = True
+    hole_fill_use_convex_hull: bool = False
 
     # Post-processing
     crop_to_aabb: bool = True
@@ -95,8 +100,6 @@ def _load_transform_json(path: Path) -> np.ndarray:
 
 
 def _load_scale_factor(path: Path) -> float:
-    if not path.exists():
-        return 1.0
     with open(path, "r") as f:
         data = json.load(f)
     return float(data.get("scale_factor", 1.0))
@@ -178,6 +181,8 @@ def _points_from_rgbd(
         camera_pose_scaled[:3, 3] = camera_pose[:3, 3] * float(avg_scene_scale)
 
         valid_mask = depth_map_scaled > 0
+        if float(cfg.depth_gradient_thr) > 0:
+            valid_mask = valid_mask & _depth_gradient_mask(depth_map_scaled, float(cfg.depth_gradient_thr))
 
         if mask_file.exists():
             mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
@@ -214,12 +219,13 @@ def _points_from_rgbd(
         extent = np.asarray(cfg.roi_half_extent_m, dtype=np.float64)
         if extent.shape != (3,):
             raise ValueError(f"roi_half_extent_m must be a 3-tuple (x, y, z), got {extent}")
-        keep = np.all(np.abs(pts - center[None, :]) <= extent[None, :], axis=1)
-        pts = pts[keep]
-        cols = cols[keep] if cols is not None else None
+        if not cfg.disable_roi_crop:
+            keep = np.all(np.abs(pts - center[None, :]) <= extent[None, :], axis=1)
+            pts = pts[keep]
+            cols = cols[keep] if cols is not None else None
 
-        if pts.size == 0:
-            continue
+            if pts.size == 0:
+                continue
 
         all_points.append(pts)
         if cols is not None:
@@ -493,7 +499,7 @@ def _drop_mesh_vertices_below_z(
     z_min: float,
     cfg: Ply2SceneConfig,
 ) -> o3d.geometry.TriangleMesh:
-    """Hard filter: remove vertices (and any triangles touching them) with z < z_min."""
+    """(Deprecated) Hard filter: remove vertices (and any triangles touching them) with z < z_min."""
     vertices = np.asarray(mesh.vertices, dtype=np.float64)
     triangles = np.asarray(mesh.triangles, dtype=np.int64)
     if vertices.size == 0 or triangles.size == 0:
@@ -641,15 +647,34 @@ def main(cfg: Ply2SceneConfig) -> None:
 
     scale = cfg.mesh_scale_factor
     if scale is None:
+        if not paths.pipeline_config_json.exists():
+            raise FileNotFoundError(
+                "pipeline_config_json not found, so mesh scale_factor is unknown. "
+                "Either run `holosoma_retargeting.pipeline` first (so it writes scale_factor), "
+                "or pass `--mesh-scale-factor <scale_factor>` to `ply2scene.convert`."
+            )
         scale = _load_scale_factor(paths.pipeline_config_json)
 
     points, colors, first_center = _points_from_rgbd(paths, T_align, cfg)
+    if cfg.collision_z_min_m is not None:
+        z_min = float(cfg.collision_z_min_m)
+        before_n = int(points.shape[0])
+        keep = points[:, 2] >= z_min
+        points = points[keep]
+        if colors is not None:
+            colors = colors[keep]
+        after_n = int(points.shape[0])
+        print(f"[ply2scene] collision_z_min_m={z_min:.4f}: points {before_n}->{after_n}")
+        if after_n == 0:
+            raise ValueError(f"collision_z_min_m={z_min:.4f} removed all points; lower the threshold.")
     method = _select_mesh_method(cfg)
     hole_fill_points_count = 0
 
     if method == "poisson":
         pcd = _prepare_point_cloud(points, colors, cfg)
         mesh_visual = _reconstruct_mesh(pcd, cfg, depth=int(cfg.poisson_depth_coarse))
+        if first_center is not None:
+            mesh_visual = _orient_mesh_towards_point(mesh_visual, first_center, cfg)
         mesh_collision = mesh_visual
     else:
         pts = points
@@ -688,18 +713,6 @@ def main(cfg: Ply2SceneConfig) -> None:
 
     visual_path = meshes_dir / "scene_visual.obj"
     collision_path = meshes_dir / "scene_collision.obj"
-
-    if cfg.collision_z_min_m is not None:
-        z_min = float(cfg.collision_z_min_m)
-        before_v = len(mesh_collision.vertices)
-        before_t = len(mesh_collision.triangles)
-        mesh_collision = _drop_mesh_vertices_below_z(mesh_collision, z_min=z_min, cfg=cfg)
-        after_v = len(mesh_collision.vertices)
-        after_t = len(mesh_collision.triangles)
-        print(
-            f"[ply2scene] collision_z_min_m={z_min:.4f}: "
-            f"verts {before_v}->{after_v}, tris {before_t}->{after_t}"
-        )
 
     o3d.io.write_triangle_mesh(str(visual_path), mesh_visual, write_triangle_uvs=False)
     o3d.io.write_triangle_mesh(str(collision_path), mesh_collision, write_triangle_uvs=False)

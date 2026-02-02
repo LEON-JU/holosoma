@@ -36,10 +36,17 @@ def create_scaled_scene_urdf(scene_urdf_path: Path, scale: float, output_path: P
         output_path = scene_urdf_path.with_name(
             scene_urdf_path.stem + f"_scaled_{scale:.4f}" + scene_urdf_path.suffix
         )
-    if output_path.exists():
+    # If writing to a separate file and it already exists, treat it as a cache.
+    # But if overwriting the source file (output_path == scene_urdf_path), we must rewrite
+    # to ensure the scale matches the current pipeline scale_factor.
+    if output_path.exists() and output_path.resolve() != scene_urdf_path.resolve():
         return output_path
 
     content = scene_urdf_path.read_text()
+    desired = f'scale="{scale} {scale} {scale}"'
+    if output_path.exists() and desired in content:
+        # Overwrite target already has the expected scale; keep as-is.
+        return output_path
     content = re.sub(r'scale="[^"]*"', f'scale="{scale} {scale} {scale}"', content)
     output_path.write_text(content)
     return output_path

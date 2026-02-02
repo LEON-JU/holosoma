@@ -57,6 +57,10 @@ def _save_transform_json(path: Path, T: np.ndarray, *, seq: str, robot: str) -> 
         json.dump(payload, f, indent=2)
 
 
+def _resolve_ground_alignment_mode(args: PipelineArgs) -> str:
+    return str(args.ground_alignment_mode)
+
+
 def _compute_vertical_bias_z_min_from_intermimic_pt(
     pt_path: Path,
     *,
@@ -95,6 +99,37 @@ def _save_contact_logits(pt_path: Path, out_path: Path) -> None:
     )
 
 
+def _write_pipeline_config(
+    *,
+    path: Path,
+    args: PipelineArgs,
+    paths,
+    scale_factor: float,
+    stage: str,
+    retarget_mode: str,
+    vertical_bias_z_min_human_m: float | None = None,
+    vertical_bias_z_min_robot_m: float | None = None,
+) -> None:
+    payload = {
+        "seq": args.seq,
+        "robot": args.robot,
+        "human_height_m": args.human_height_m,
+        "scale_factor": float(scale_factor),
+        "retarget_mode": retarget_mode,
+        "stage": stage,
+        "transform_path": str(paths.ground_transform_json),
+        "prepared_pt": str(paths.prepared_pt_path),
+        "retarget_save_dir": str(paths.retarget_save_dir),
+        "paths": {k: str(v) for k, v in asdict(paths).items()},
+        "vertical_bias_z_min_human_m": vertical_bias_z_min_human_m,
+        "vertical_bias_z_min_robot_m": vertical_bias_z_min_robot_m,
+        "timestamp": datetime.now().isoformat(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+
 def main(args: PipelineArgs) -> None:
     paths = get_sequence_paths(seq=args.seq, robot=args.robot, manual=args.manual)
     ensure_run_dirs(paths)
@@ -102,7 +137,8 @@ def main(args: PipelineArgs) -> None:
     scale_factor = get_scale_factor(args.robot, args.human_height_m)
 
     # 1) Ground alignment
-    if args.run_ground_alignment:
+    mode = _resolve_ground_alignment_mode(args)
+    if mode == "manual":
         ga_cfg = {
             "smpl_model_path": str(args.manual.smpl_model_path),
             "human_mesh_path": str(paths.all_results_video),
@@ -119,10 +155,58 @@ def main(args: PipelineArgs) -> None:
 
         T_align = ground_alignment.main(ga_cfg)
         _save_transform_json(paths.ground_transform_json, T_align, seq=args.seq, robot=args.robot)
-    else:
+    elif mode == "cached":
         if not paths.ground_transform_json.exists():
-            raise FileNotFoundError(f"run_ground_alignment=False but transform not found: {paths.ground_transform_json}")
+            raise FileNotFoundError(f"ground_alignment_mode='cached' but transform not found: {paths.ground_transform_json}")
         T_align = _load_transform_json(paths.ground_transform_json)
+    elif mode == "geocalib":
+        from holosoma_retargeting.postprocess.geocalib_ground_alignment import (
+            GeoCalibGroundAlignmentConfig,
+            compute_geocalib_ground_alignment,
+        )
+
+        cfg = GeoCalibGroundAlignmentConfig(
+            predicted_dir=paths.predicted_dir,
+            depth_dir=paths.depth_recovered,
+            results_dir=paths.results_dir,
+            fused_scene_ply=paths.fused_scene_ply,
+            use_rgbd_scene=bool(args.geocalib_alignment.use_rgbd_scene),
+            num_geocalib_frames=int(args.geocalib_alignment.num_geocalib_frames),
+            geocalib_frame_stride=int(args.geocalib_alignment.geocalib_frame_stride),
+            geocalib_frame_indices=args.geocalib_alignment.geocalib_frame_indices,
+            geocalib_weights=str(args.geocalib_alignment.geocalib_weights),
+            geocalib_camera_y_up=bool(args.geocalib_alignment.geocalib_camera_y_up),
+            geocalib_device=args.geocalib_alignment.geocalib_device,
+            geocalib_angle_outlier_deg=float(args.geocalib_alignment.geocalib_angle_outlier_deg),
+            max_points=int(args.geocalib_alignment.max_points),
+            voxel_size=float(args.geocalib_alignment.voxel_size),
+            plane_distance_threshold=float(args.geocalib_alignment.plane_distance_threshold),
+            plane_ransac_n=int(args.geocalib_alignment.plane_ransac_n),
+            plane_num_iterations=int(args.geocalib_alignment.plane_num_iterations),
+            plane_angle_deg=float(args.geocalib_alignment.plane_angle_deg),
+            plane_max_candidates=int(args.geocalib_alignment.plane_max_candidates),
+            recenter_xy=bool(args.geocalib_alignment.recenter_xy),
+        )
+        result = compute_geocalib_ground_alignment(cfg, return_points=False, debug=bool(args.geocalib_alignment.debug))
+        T_align = result.T_align
+        _save_transform_json(paths.ground_transform_json, T_align, seq=args.seq, robot=args.robot)
+    else:
+        raise ValueError(f"Unknown ground_alignment_mode: {mode}")
+
+    # If we're only preparing artifacts (transform + scale_factor), write pipeline_config.json now and exit.
+    if str(getattr(args, "stage", "full")) == "prepare":
+        _write_pipeline_config(
+            path=paths.pipeline_config_json,
+            args=args,
+            paths=paths,
+            scale_factor=scale_factor,
+            stage="prepare",
+            retarget_mode=str(args.retarget_mode),
+        )
+        print(f"[pipeline] Prepared artifacts for {args.seq}/{args.robot}")
+        print(f"[pipeline] Transform: {paths.ground_transform_json}")
+        print(f"[pipeline] Config: {paths.pipeline_config_json}")
+        return
 
     # 2) Prepare retarget data
     if args.retarget_mode == "robot_only":
@@ -214,7 +298,14 @@ def main(args: PipelineArgs) -> None:
         scene_urdf_src = scene_pkg_dir / "scene.urdf"
         if not scene_urdf_src.exists():
             raise FileNotFoundError(f"Scene URDF not found: {scene_urdf_src}")
+        # Ensure the URDF mesh scale matches the pipeline scale_factor (needed for Viser/yourdfpy rendering).
         create_scaled_scene_urdf(scene_urdf_src, scale_factor, output_path=scene_urdf_src)
+        expected_scale = f'scale="{scale_factor} {scale_factor} {scale_factor}"'
+        if expected_scale not in scene_urdf_src.read_text():
+            raise RuntimeError(
+                f"Failed to update scene URDF mesh scale to {scale_factor}. "
+                f"Expected to find {expected_scale} in {scene_urdf_src}."
+            )
 
         rt_cfg = RetargetingConfig(
             task_type="climbing",
@@ -234,22 +325,16 @@ def main(args: PipelineArgs) -> None:
     robot_retarget.main(rt_cfg)
 
     # 4) Save run summary for downstream tools
-    summary = {
-        "seq": args.seq,
-        "robot": args.robot,
-        "human_height_m": args.human_height_m,
-        "scale_factor": scale_factor,
-        "retarget_mode": args.retarget_mode,
-        "vertical_bias_z_min_human_m": vertical_bias_z_min_human_m,
-        "vertical_bias_z_min_robot_m": vertical_bias_z_min_robot_m,
-        "paths": {k: str(v) for k, v in asdict(paths).items()},
-        "transform_path": str(paths.ground_transform_json),
-        "prepared_pt": str(paths.prepared_pt_path),
-        "retarget_save_dir": str(paths.retarget_save_dir),
-        "timestamp": datetime.now().isoformat(),
-    }
-    with open(paths.pipeline_config_json, "w") as f:
-        json.dump(summary, f, indent=2)
+    _write_pipeline_config(
+        path=paths.pipeline_config_json,
+        args=args,
+        paths=paths,
+        scale_factor=scale_factor,
+        stage="full",
+        retarget_mode=str(args.retarget_mode),
+        vertical_bias_z_min_human_m=vertical_bias_z_min_human_m,
+        vertical_bias_z_min_robot_m=vertical_bias_z_min_robot_m,
+    )
 
 
 if __name__ == "__main__":

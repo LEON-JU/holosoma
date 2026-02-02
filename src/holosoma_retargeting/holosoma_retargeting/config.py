@@ -9,9 +9,9 @@ Design goals:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 SeqName = Literal["smooth", "wall_smooth", "rooftop_smooth"]
 RobotType = Literal["g1", "t1"]
@@ -40,18 +40,49 @@ class ManualPaths:
 
 
 @dataclass(frozen=True)
+class GeoCalibAlignmentArgs:
+    """Config for automatic gravity+ground alignment."""
+
+    use_rgbd_scene: bool = True
+    num_geocalib_frames: int = 12
+    geocalib_frame_stride: int = 5
+    geocalib_frame_indices: str | None = None
+    geocalib_weights: str = "pinhole"
+    geocalib_camera_y_up: bool = False
+    geocalib_device: str | None = None
+    geocalib_angle_outlier_deg: float = 15.0
+
+    max_points: int = 200_000
+    voxel_size: float = 0.05
+    plane_distance_threshold: float = 0.03
+    plane_ransac_n: int = 3
+    plane_num_iterations: int = 2000
+    plane_angle_deg: float = 10.0
+    plane_max_candidates: int = 10
+    recenter_xy: bool = True
+
+    vis: bool = False
+    debug: bool = False
+
+
+@dataclass(frozen=True)
 class PipelineArgs:
     seq: SeqName
     robot: RobotType = "g1"
     human_height_m: float = 1.7
+    stage: Literal["prepare", "full"] = "full"
+    """Pipeline stage: 'prepare' writes transform+scale artifacts without requiring a scene mesh; 'full' runs retarget."""
     retarget_mode: Literal["robot_only", "climbing_scene"] = "robot_only"
     """Select retarget pipeline mode."""
     robot_urdf_file: Path | None = None
     """Optional override for robot URDF (useful for climbing)."""
 
     # Ground alignment behavior
-    run_ground_alignment: bool = False
-    """If True, opens Viser UI and writes `transform.json`."""
+    ground_alignment_mode: Literal["cached", "manual", "geocalib"] = "geocalib"
+    """How to obtain the scene alignment transform in step (1)."""
+
+    geocalib_alignment: GeoCalibAlignmentArgs = field(default_factory=GeoCalibAlignmentArgs)
+    """Config for ground_alignment_mode="geocalib"."""
 
     # Manual path overrides (deploy-time)
     manual: ManualPaths = ManualPaths()
